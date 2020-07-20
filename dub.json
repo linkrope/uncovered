@@ -1,6 +1,6 @@
 {
 	"name": "uncovered",
-	"description": "TODO.",
+	"description": "Summary tool for coverage listing files.",
 	"authors": ["Mario Kröplin"],
 	"copyright": "Copyright © 2020, Mario Kröplin",
 	"license": "BSL-1.0"

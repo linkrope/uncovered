@@ -3,58 +3,70 @@
 //    (See accompanying file LICENSE_1_0.txt or copy at
 //          https://www.boost.org/LICENSE_1_0.txt)
 
+import core.stdc.stdlib;
+import std.algorithm;
 import std.range;
+import std.stdio;
+import std.traits;
 
-void main(const string[] args)
+void main(string[] args)
 {
-    import std.algorithm : map, sum;
     import std.conv : to;
-    import std.format : format;
-    import std.stdio : File, writeln;
+    import std.getopt : defaultGetoptPrinter, getopt, GetoptResult;
 
-    Record[] records;
+    size_t depth;
+    GetoptResult result;
 
-    foreach (path; args.dropOne)
-        // Throws: ErrnoException if the file could not be opened.
-        records ~= File(path).byLine.read(path);
+    try
+    {
+        result = getopt(args,
+            "depth", "Write package summary limited to the given depth.", &depth,
+        );
+    }
+    catch (Exception exception)
+    {
+        stderr.writeln("error: ", exception.msg);
+        exit(EXIT_FAILURE);
+    }
+    if (result.helpWanted)
+    {
+        import std.path : baseName;
 
-    const hitCountSum = records.map!(record => record.hitCount).sum;
-    const missCountSum = records.map!(record => record.missCount).sum;
+        writefln!"Usage: %s [options] files"(args.front.baseName);
+        writeln("Examine listing files to identify the ones with the most uncovered lines.");
+        defaultGetoptPrinter("Options:", result.options);
+        exit(EXIT_SUCCESS);
+    }
+
+    auto records = args.dropOne.map!read;
+    const hitCountSum = records.map!"a.hitCount".sum;
+    const missCountSum = records.map!"a.missCount".sum;
     const width = (hitCountSum + missCountSum).to!string.length;
 
     records.write(width);
+    if (depth > 0)
+        records.summary(depth).write(width);
+    Record("lines uncovered", hitCountSum, missCountSum).write(width);
+}
 
-    const depth = 2;
-    Record[string] soFar; // TODO: do something stable
+Record read(string path)
+{
+    import std.exception : ErrnoException;
 
-    foreach (record; records)
-        with (record)
-        {
-            import std.array : join, split;
-            import std.path : baseName, stripExtension;
-
-            // TODO: check whether there is one for dropBackOne
-            const prefix = path.baseName.stripExtension.split("-").dropBackOne.take(depth).join("-");
-
-            if (auto subtotal = prefix in soFar)
-            {
-                subtotal.hitCount += hitCount;
-                subtotal.missCount += missCount;
-            }
-            else
-                soFar[prefix] = Record(prefix, hitCount, missCount);
-
-        }
-    soFar.values.write(width);
-    writeln(format!"%*d/%*d lines uncovered"(width, missCountSum, width, hitCountSum + missCountSum));
+    try
+        return File(path).byLine.read(path);
+    catch (ErrnoException exception)
+    {
+        stderr.writefln!"error: %s"(exception.msg);
+        exit(EXIT_FAILURE);
+        assert(0);
+    }
 }
 
 Record read(Range)(Range range, string path)
 if (isInputRange!Range)
 {
     import std.regex : matchFirst, regex;
-    import std.stdio : stderr, writeln;
-    import std.traits : EnumMembers;
 
     static immutable string[] patterns = [EnumMembers!Pattern];
     enum pattern = regex(patterns.dropOne);
@@ -78,7 +90,7 @@ if (isInputRange!Range)
             case index(percent):
                 break;
             default:
-                stderr.writeln("error: ", line); // TODO: better error message
+                stderr.writefln!"skipping: %s"(line);
                 break;
         }
     }
@@ -102,29 +114,69 @@ private enum Pattern
     nope = `^\s+\|`,
     miss = `^0+\|`,
     hit = `^\s*[1-9]\d*\|`,
-    noCode = `(?P<source>^.+) has no code`,
-    percent = `(?P<source>^.+) is (?P<percent>\d+)% covered`,
+    noCode = `(?P<path>^.+) has no code`,
+    percent = `(?P<path>^.+) is (?P<percent>\d+)% covered`,
 }
 
 private int index(Pattern pattern) pure @safe
 {
-    import std.algorithm : countUntil;
     import std.conv : to;
-    import std.traits : EnumMembers;
 
     return [EnumMembers!Pattern].countUntil(pattern).to!int;
 }
 
-void write(const Record[] records, size_t width)
+auto summary(Range)(Range records, size_t depth)
+if (isInputRange!Range && is(Unqual!(ElementType!Range) == Record))
 {
-    import std.algorithm : sort, SwapStrategy;
-    import std.format : format;
-    import std.stdio : writeln;
+    string[] order;
+    Record[string] subtotal;
 
-    foreach (record; records.dup.sort!((a, b) => a.missCount < b.missCount, SwapStrategy.stable))
-        with (record)
-            writeln(format!"%*d/%-*d %s"(width, missCount, width, hitCount + missCount, path));
+    foreach (record; records)
+    {
+        const key = record.path.packages(depth);
+
+        if (key.empty)
+            continue;
+        if (key !in subtotal)
+        {
+            order ~= key;
+            subtotal[key] = Record(key);
+        }
+        with (subtotal[key])
+        {
+            hitCount += record.hitCount;
+            missCount += record.missCount;
+        }
+    }
+    return order.map!(key => subtotal[key]);
+}
+
+string packages(string path, size_t depth) nothrow pure @safe
+{
+    import std.path : baseName;
+
+    return path.baseName.split("-").dropBackOne.take(depth).join("-");
+}
+
+unittest
+{
+    assert("qux/bar-baz-foo.lst".packages(2) == "bar-baz");
+    assert("qux/bar-foo.lst".packages(2) == "bar");
+    assert("foo.lst".packages(1).empty);
+}
+
+void write(Range)(Range records, size_t width)
+if (isInputRange!Range && is(ElementType!Range == Record))
+{
+    foreach (record; records.array.sort!("a.missCount < b.missCount", SwapStrategy.stable))
+        record.write(width);
     writeln('-'.repeat(width + 1 + width));
+}
+
+void write(Record record, size_t width) @safe
+{
+    with (record)
+        writefln!"%*d/%-*d %s"(width, missCount, width, hitCount + missCount, path);
 }
 
 struct Record
