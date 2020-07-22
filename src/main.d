@@ -20,7 +20,7 @@ void main(string[] args)
     try
     {
         result = getopt(args,
-            "depth", "Write package summary limited to the given depth.", &depth,
+                "depth", "Write package summary limited to the given depth.", &depth,
         );
     }
     catch (Exception exception)
@@ -43,10 +43,18 @@ void main(string[] args)
     const missCountSum = records.map!"a.missCount".sum;
     const width = (hitCountSum + missCountSum).to!string.length;
 
-    records.write(width);
-    if (depth > 0)
-        records.summary(depth).write(width);
-    Record("lines uncovered", hitCountSum, missCountSum).write(width);
+    if (!records.empty)
+    {
+        records.write(width);
+        if (depth > 0)
+        {
+            auto totals = records.summary(depth);
+
+            if (!totals.empty)
+                totals.write(width);
+        }
+        Record("lines uncovered", hitCountSum, missCountSum).write(width);
+    }
 }
 
 Record read(string path)
